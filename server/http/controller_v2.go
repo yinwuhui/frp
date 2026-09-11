@@ -294,6 +294,38 @@ func (c *Controller) APIV2ProxyTraffic(ctx *httppkg.Context) (any, error) {
 	return buildV2ProxyTrafficResp(name, proxyTrafficInfo, time.Now()), nil
 }
 
+// /api/v2/proxies/{name}/connections
+func (c *Controller) APIV2ProxyConnections(ctx *httppkg.Context) (any, error) {
+	name, err := decodeV2PathParam(ctx, "name", "proxy name")
+	if err != nil {
+		return nil, err
+	}
+	if mem.StatsCollector.GetProxyByName(name) == nil {
+		return nil, httppkg.NewError(http.StatusNotFound, "no proxy info found")
+	}
+
+	page, pageSize, err := parseV2PageParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status, err := parseV2ConnectionStatus(ctx.Query("status"))
+	if err != nil {
+		return nil, err
+	}
+
+	conns, total := mem.StatsCollector.GetProxyConnections(name, status, page, pageSize)
+	items := make([]model.V2ProxyConnectionResp, 0, len(conns))
+	for _, conn := range conns {
+		items = append(items, buildV2ProxyConnectionResp(conn))
+	}
+	return model.V2PageResp[model.V2ProxyConnectionResp]{
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+		Items:    items,
+	}, nil
+}
+
 func decodeV2PathParam(ctx *httppkg.Context, key string, label string) (string, error) {
 	raw := ctx.Param(key)
 	if raw == "" {
@@ -304,6 +336,19 @@ func decodeV2PathParam(ctx *httppkg.Context, key string, label string) (string, 
 		return "", httppkg.NewError(http.StatusBadRequest, fmt.Sprintf("invalid %s", label))
 	}
 	return decoded, nil
+}
+
+func parseV2ConnectionStatus(status string) (string, error) {
+	switch strings.ToLower(status) {
+	case "", "all":
+		return "", nil
+	case mem.ConnectionStatusActive:
+		return mem.ConnectionStatusActive, nil
+	case mem.ConnectionStatusClosed:
+		return mem.ConnectionStatusClosed, nil
+	default:
+		return "", httppkg.NewError(http.StatusBadRequest, "status must be one of all, active, closed")
+	}
 }
 
 func getOrCreateV2User(items map[string]*model.V2UserResp, user string) *model.V2UserResp {
@@ -507,6 +552,28 @@ func buildV2ProxyTrafficResp(name string, traffic *mem.ProxyTrafficInfo, now tim
 		Unit:        v2ProxyTrafficUnit,
 		Granularity: v2ProxyTrafficGranularity,
 		History:     history,
+	}
+}
+
+func buildV2ProxyConnectionResp(conn *mem.ConnectionInfo) model.V2ProxyConnectionResp {
+	return model.V2ProxyConnectionResp{
+		ID:             conn.ID,
+		ProxyName:      conn.ProxyName,
+		ProxyType:      conn.ProxyType,
+		User:           conn.User,
+		ClientID:       conn.ClientID,
+		RemoteAddr:     conn.RemoteAddr,
+		RemoteIP:       conn.RemoteIP,
+		RemotePort:     conn.RemotePort,
+		LocalAddr:      conn.LocalAddr,
+		LocalIP:        conn.LocalIP,
+		LocalPort:      conn.LocalPort,
+		Status:         conn.Status,
+		ConnectedAt:    conn.ConnectedAt,
+		DisconnectedAt: conn.DisconnectedAt,
+		Duration:       conn.Duration,
+		TrafficIn:      conn.TrafficIn,
+		TrafficOut:     conn.TrafficOut,
 	}
 }
 

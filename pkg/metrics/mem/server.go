@@ -15,6 +15,8 @@
 package mem
 
 import (
+	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -63,6 +65,7 @@ func newServerMetricsWithClock(clk clock.WithTicker) *serverMetrics {
 			ProxyTypeCounts: make(map[string]metric.Counter),
 
 			ProxyStatistics: make(map[string]*ProxyStatistics),
+			ActiveConns:     make(map[uint64]*ConnectionStatistics),
 		},
 	}
 }
@@ -174,6 +177,35 @@ func (m *serverMetrics) OpenConnection(name string, _ string) {
 	}
 }
 
+func (m *serverMetrics) OpenConnectionWithInfo(info server.ConnectionOpenInfo) uint64 {
+	m.info.CurConns.Inc(1)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	proxyStats, ok := m.info.ProxyStatistics[info.ProxyName]
+	if ok {
+		proxyStats.CurConns.Inc(1)
+	}
+
+	m.info.NextConnectionID++
+	id := m.info.NextConnectionID
+	remoteIP, remotePort := splitAddr(info.RemoteAddr)
+	localIP, localPort := splitAddr(info.LocalAddr)
+	m.info.ActiveConns[id] = &ConnectionStatistics{
+		ID:          id,
+		ProxyName:   info.ProxyName,
+		ProxyType:   info.ProxyType,
+		RemoteAddr:  info.RemoteAddr,
+		RemoteIP:    remoteIP,
+		RemotePort:  remotePort,
+		LocalAddr:   info.LocalAddr,
+		LocalIP:     localIP,
+		LocalPort:   localPort,
+		ConnectedAt: m.clock.Now(),
+	}
+	return id
+}
+
 func (m *serverMetrics) CloseConnection(name string, _ string) {
 	m.info.CurConns.Dec(1)
 
@@ -181,6 +213,35 @@ func (m *serverMetrics) CloseConnection(name string, _ string) {
 	defer m.mu.Unlock()
 	proxyStats, ok := m.info.ProxyStatistics[name]
 	if ok {
+		proxyStats.CurConns.Dec(1)
+	}
+}
+
+func (m *serverMetrics) CloseConnectionWithInfo(id uint64, name string, _ string, trafficIn int64, trafficOut int64) {
+	proxyName := name
+
+	m.info.CurConns.Dec(1)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if conn, ok := m.info.ActiveConns[id]; ok {
+		delete(m.info.ActiveConns, id)
+		conn.DisconnectedAt = m.clock.Now()
+		conn.TrafficIn = trafficIn
+		conn.TrafficOut = trafficOut
+		proxyName = conn.ProxyName
+		m.info.ConnectionHistory = append(m.info.ConnectionHistory, conn)
+		if len(m.info.ConnectionHistory) > ConnectionHistoryLimit {
+			copy(m.info.ConnectionHistory, m.info.ConnectionHistory[len(m.info.ConnectionHistory)-ConnectionHistoryLimit:])
+			m.info.ConnectionHistory = m.info.ConnectionHistory[:ConnectionHistoryLimit]
+		}
+	}
+
+	if proxyName == "" {
+		return
+	}
+	if proxyStats, ok := m.info.ProxyStatistics[proxyName]; ok {
 		proxyStats.CurConns.Dec(1)
 	}
 }
@@ -297,4 +358,86 @@ func (m *serverMetrics) GetProxyTraffic(name string) (res *ProxyTrafficInfo) {
 		res.TrafficOut = proxyStats.TrafficOut.GetLastDaysCount(ReserveDays)
 	}
 	return
+}
+
+func (m *serverMetrics) GetProxyConnections(name string, status string, page int, pageSize int) ([]*ConnectionInfo, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	items := make([]*ConnectionInfo, 0)
+	if status == "" || status == ConnectionStatusActive {
+		for _, conn := range m.info.ActiveConns {
+			if name != "" && conn.ProxyName != name {
+				continue
+			}
+			items = append(items, m.toConnectionInfo(conn, ConnectionStatusActive))
+		}
+	}
+	if status == "" || status == ConnectionStatusClosed {
+		for i := len(m.info.ConnectionHistory) - 1; i >= 0; i-- {
+			conn := m.info.ConnectionHistory[i]
+			if name != "" && conn.ProxyName != name {
+				continue
+			}
+			items = append(items, m.toConnectionInfo(conn, ConnectionStatusClosed))
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].ConnectedAt > items[j].ConnectedAt
+	})
+
+	total := len(items)
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []*ConnectionInfo{}, total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return items[start:end], total
+}
+
+func (m *serverMetrics) toConnectionInfo(conn *ConnectionStatistics, status string) *ConnectionInfo {
+	info := &ConnectionInfo{
+		ID:          conn.ID,
+		ProxyName:   conn.ProxyName,
+		ProxyType:   conn.ProxyType,
+		RemoteAddr:  conn.RemoteAddr,
+		RemoteIP:    conn.RemoteIP,
+		RemotePort:  conn.RemotePort,
+		LocalAddr:   conn.LocalAddr,
+		LocalIP:     conn.LocalIP,
+		LocalPort:   conn.LocalPort,
+		Status:      status,
+		ConnectedAt: conn.ConnectedAt.Unix(),
+		TrafficIn:   conn.TrafficIn,
+		TrafficOut:  conn.TrafficOut,
+	}
+	if proxyStats, ok := m.info.ProxyStatistics[conn.ProxyName]; ok {
+		info.User = proxyStats.User
+		info.ClientID = proxyStats.ClientID
+	}
+	now := m.clock.Now()
+	if status == ConnectionStatusClosed && !conn.DisconnectedAt.IsZero() {
+		info.DisconnectedAt = conn.DisconnectedAt.Unix()
+		info.Duration = int64(conn.DisconnectedAt.Sub(conn.ConnectedAt).Seconds())
+	} else {
+		info.Duration = int64(now.Sub(conn.ConnectedAt).Seconds())
+	}
+	return info
+}
+
+func splitAddr(addr string) (string, string) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, ""
+	}
+	return host, port
 }

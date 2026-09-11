@@ -45,6 +45,7 @@ type fakeStatsCollector struct {
 	server    *mem.ServerStats
 	proxies   map[string]*mem.ProxyStats
 	traffic   map[string]*mem.ProxyTrafficInfo
+	conns     map[string][]*mem.ConnectionInfo
 	pruneable map[string]bool
 }
 
@@ -79,6 +80,26 @@ func (f *fakeStatsCollector) GetProxyByName(proxyName string) *mem.ProxyStats {
 
 func (f *fakeStatsCollector) GetProxyTraffic(name string) *mem.ProxyTrafficInfo {
 	return f.traffic[name]
+}
+
+func (f *fakeStatsCollector) GetProxyConnections(name string, status string, page int, pageSize int) ([]*mem.ConnectionInfo, int) {
+	items := make([]*mem.ConnectionInfo, 0)
+	for _, conn := range f.conns[name] {
+		if status != "" && conn.Status != status {
+			continue
+		}
+		items = append(items, conn)
+	}
+	total := len(items)
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []*mem.ConnectionInfo{}, total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return items[start:end], total
 }
 
 func (f *fakeStatsCollector) ClearOfflineProxies() (int, int) {
@@ -542,6 +563,85 @@ func TestAPIV2ProxyTrafficNotFoundEnvelope(t *testing.T) {
 	}
 }
 
+func TestAPIV2ProxyConnectionsEnvelopePaginationAndStatus(t *testing.T) {
+	oldStatsCollector := mem.StatsCollector
+	mem.StatsCollector = &fakeStatsCollector{
+		proxies: map[string]*mem.ProxyStats{
+			"ssh": {Name: "ssh", Type: "tcp", User: "alice", ClientID: "client-a"},
+		},
+		conns: map[string][]*mem.ConnectionInfo{
+			"ssh": {
+				{
+					ID:          1,
+					ProxyName:   "ssh",
+					ProxyType:   "tcp",
+					User:        "alice",
+					ClientID:    "client-a",
+					RemoteAddr:  "203.0.113.10:52000",
+					RemoteIP:    "203.0.113.10",
+					RemotePort:  "52000",
+					LocalAddr:   "198.51.100.1:6000",
+					LocalIP:     "198.51.100.1",
+					LocalPort:   "6000",
+					Status:      mem.ConnectionStatusActive,
+					ConnectedAt: 1783504200,
+					Duration:    30,
+					TrafficIn:   1024,
+					TrafficOut:  2048,
+				},
+				{
+					ID:             2,
+					ProxyName:      "ssh",
+					ProxyType:      "tcp",
+					Status:         mem.ConnectionStatusClosed,
+					ConnectedAt:    1783504100,
+					DisconnectedAt: 1783504110,
+					Duration:       10,
+				},
+			},
+		},
+	}
+	t.Cleanup(func() {
+		mem.StatsCollector = oldStatsCollector
+	})
+
+	controller := NewController(&v1.ServerConfig{}, registry.NewClientRegistry(), serverproxy.NewManager())
+	router := newV2TestRouter(controller)
+
+	resp := performRequest(router, "/api/v2/proxies/ssh/connections?status=active&page=1&pageSize=50")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status mismatch, want %d got %d, body: %s", http.StatusOK, resp.Code, resp.Body.String())
+	}
+	rawResp := decodeResponse[v2EnvelopeForTest[model.V2PageResp[map[string]json.RawMessage]]](t, resp)
+	if rawResp.Data.Total != 1 || len(rawResp.Data.Items) != 1 {
+		t.Fatalf("connection page mismatch: %#v", rawResp.Data)
+	}
+	assertRawJSONKeys(t, rawResp.Data.Items[0],
+		"clientID",
+		"connectedAt",
+		"duration",
+		"id",
+		"localAddr",
+		"localIP",
+		"localPort",
+		"proxyName",
+		"proxyType",
+		"remoteAddr",
+		"remoteIP",
+		"remotePort",
+		"status",
+		"trafficIn",
+		"trafficOut",
+		"user",
+	)
+
+	connResp := decodeResponse[v2EnvelopeForTest[model.V2PageResp[model.V2ProxyConnectionResp]]](t, resp)
+	conn := connResp.Data.Items[0]
+	if conn.RemoteIP != "203.0.113.10" || conn.RemotePort != "52000" || conn.TrafficIn != 1024 || conn.TrafficOut != 2048 {
+		t.Fatalf("connection detail mismatch: %#v", conn)
+	}
+}
+
 func TestAPIV2ProxyDetailAndTrafficEncodedName(t *testing.T) {
 	name := "folder/ssh?x#y"
 	oldStatsCollector := mem.StatsCollector
@@ -844,6 +944,7 @@ func newV2TestRouter(controller *Controller) *mux.Router {
 	encodedPathRouter.UseEncodedPath()
 	encodedPathRouter.HandleFunc("/api/v2/clients/{key}", httppkg.MakeHTTPHandlerFuncV2(controller.APIV2ClientDetail)).Methods(http.MethodGet)
 	router.HandleFunc("/api/v2/proxies", httppkg.MakeHTTPHandlerFuncV2(controller.APIV2ProxyList)).Methods(http.MethodGet)
+	encodedPathRouter.HandleFunc("/api/v2/proxies/{name}/connections", httppkg.MakeHTTPHandlerFuncV2(controller.APIV2ProxyConnections)).Methods(http.MethodGet)
 	encodedPathRouter.HandleFunc("/api/v2/proxies/{name}/traffic", httppkg.MakeHTTPHandlerFuncV2(controller.APIV2ProxyTraffic)).Methods(http.MethodGet)
 	encodedPathRouter.HandleFunc("/api/v2/proxies/{name}", httppkg.MakeHTTPHandlerFuncV2(controller.APIV2ProxyDetail)).Methods(http.MethodGet)
 	router.HandleFunc("/api/serverinfo", httppkg.MakeHTTPHandlerFunc(controller.APIServerInfo)).Methods(http.MethodGet)

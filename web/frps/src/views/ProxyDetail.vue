@@ -89,6 +89,99 @@
           </div>
         </div>
 
+        <!-- Connections Card -->
+        <div class="connections-card">
+          <div class="connections-header">
+            <h2>Connections</h2>
+            <div class="connections-actions">
+              <el-radio-group
+                v-model="connectionStatus"
+                size="small"
+                @change="handleConnectionStatusChange"
+              >
+                <el-radio-button label="all">All</el-radio-button>
+                <el-radio-button label="active">Active</el-radio-button>
+                <el-radio-button label="closed">Closed</el-radio-button>
+              </el-radio-group>
+              <el-button
+                :icon="Refresh"
+                size="small"
+                :loading="connectionsLoading"
+                @click="fetchConnections"
+              />
+            </div>
+          </div>
+          <el-table
+            v-loading="connectionsLoading"
+            :data="connections"
+            class="connections-table"
+            empty-text="No connection records"
+          >
+            <el-table-column label="Status" width="96">
+              <template #default="{ row }">
+                <span class="connection-status" :class="row.status">
+                  {{ row.status }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="Remote" min-width="180">
+              <template #default="{ row }">
+                <div class="connection-primary">
+                  {{ row.remoteIP || row.remoteAddr }}
+                </div>
+                <div v-if="row.remotePort" class="connection-secondary">
+                  Port {{ row.remotePort }}
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="FRPS Endpoint" min-width="160">
+              <template #default="{ row }">
+                <div class="connection-primary">{{ row.localIP || '-' }}</div>
+                <div v-if="row.localPort" class="connection-secondary">
+                  Port {{ row.localPort }}
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Connected" min-width="150">
+              <template #default="{ row }">
+                {{ formatConnectionTime(row.connectedAt) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Disconnected" min-width="150">
+              <template #default="{ row }">
+                {{
+                  row.disconnectedAt
+                    ? formatConnectionTime(row.disconnectedAt)
+                    : '-'
+                }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Duration" width="110">
+              <template #default="{ row }">
+                {{ formatDuration(row.duration) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Traffic" min-width="170">
+              <template #default="{ row }">
+                <span class="traffic-inline">
+                  ↓ {{ formatTraffic(row.trafficIn) }} / ↑
+                  {{ formatTraffic(row.trafficOut) }}
+                </span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="connections-footer">
+            <el-pagination
+              v-model:current-page="connectionPage"
+              v-model:page-size="connectionPageSize"
+              small
+              layout="total, prev, pager, next"
+              :total="connectionTotal"
+              @current-change="fetchConnections()"
+            />
+          </div>
+        </div>
+
         <!-- Configuration Section -->
         <div class="config-section">
           <div class="config-section-header">
@@ -240,8 +333,9 @@ import {
   Lightning,
   Tickets,
   Location,
+  Refresh,
 } from '@element-plus/icons-vue'
-import { getProxyByNameV2 } from '../api/proxy'
+import { getProxyByNameV2, getProxyConnections } from '../api/proxy'
 import { getServerInfo } from '../api/server'
 import {
   BaseProxy,
@@ -254,6 +348,7 @@ import {
   SUDPProxy,
 } from '../utils/proxy'
 import Traffic from '../components/Traffic.vue'
+import type { ProxyConnectionInfo } from '../types/proxy'
 import type { ServerInfo } from '../types/server'
 
 const route = useRoute()
@@ -267,6 +362,12 @@ const fromClient = computed(() => {
 })
 const proxy = ref<BaseProxy | null>(null)
 const loading = ref(true)
+const connections = ref<ProxyConnectionInfo[]>([])
+const connectionsLoading = ref(false)
+const connectionStatus = ref<'all' | 'active' | 'closed'>('all')
+const connectionPage = ref(1)
+const connectionPageSize = ref(10)
+const connectionTotal = ref(0)
 
 const goBack = () => {
   if (window.history.length > 1) {
@@ -346,6 +447,50 @@ const formatTrafficUnit = (bytes: number): string => {
   return units[i]
 }
 
+const formatTraffic = (bytes: number): string => {
+  return `${formatTrafficValue(bytes)} ${formatTrafficUnit(bytes)}`
+}
+
+const formatConnectionTime = (timestamp?: number): string => {
+  if (!timestamp) return '-'
+  return new Date(timestamp * 1000).toLocaleString()
+}
+
+const formatDuration = (seconds: number): string => {
+  if (!seconds) return '0s'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainingSeconds = seconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`
+  return `${remainingSeconds}s`
+}
+
+const fetchConnections = async () => {
+  const name = proxyName.value
+  if (!name) return
+
+  connectionsLoading.value = true
+  try {
+    const page = await getProxyConnections(name, {
+      page: connectionPage.value,
+      pageSize: connectionPageSize.value,
+      status: connectionStatus.value,
+    })
+    connections.value = page.items
+    connectionTotal.value = page.total
+  } catch (error: any) {
+    ElMessage.error('Failed to fetch connections: ' + error.message)
+  } finally {
+    connectionsLoading.value = false
+  }
+}
+
+const handleConnectionStatusChange = () => {
+  connectionPage.value = 1
+  fetchConnections()
+}
+
 const fetchServerInfo = async () => {
   if (serverInfo) return serverInfo
   const res = await getServerInfo()
@@ -405,6 +550,7 @@ const fetchProxy = async () => {
 
 onMounted(() => {
   fetchProxy()
+  fetchConnections()
 })
 </script>
 
@@ -601,11 +747,83 @@ html.dark .status-badge.online {
 
 
 /* Card Base */
-.traffic-card {
+.traffic-card,
+.connections-card {
   background: var(--el-bg-color);
   border: 1px solid var(--header-border);
   border-radius: 12px;
   margin-bottom: 16px;
+}
+
+.connections-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--header-border);
+}
+
+.connections-header h2 {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.connections-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connections-table {
+  width: 100%;
+}
+
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.connection-status.active {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.connection-status.closed {
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+}
+
+.connection-primary {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.connection-secondary {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.traffic-inline {
+  white-space: nowrap;
+}
+
+.connections-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--header-border);
 }
 
 /* Config Section */

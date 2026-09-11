@@ -177,3 +177,23 @@ type V2ProxyTrafficPointResp struct {
 	TrafficIn  int64  `json:"trafficIn"`
 	TrafficOut int64  `json:"trafficOut"`
 }
+
+type V2ProxyConnectionResp struct {
+	ID             uint64 `json:"id"`
+	ProxyName      string `json:"proxyName"`
+	ProxyType      string `json:"proxyType"`
+	User           string `json:"user"`
+	ClientID       string `json:"clientID"`
+	RemoteAddr     string `json:"remoteAddr"`
+	RemoteIP       string `json:"remoteIP"`
+	RemotePort     string `json:"remotePort"`
+	LocalAddr      string `json:"localAddr"`
+	LocalIP        string `json:"localIP"`
+	LocalPort      string `json:"localPort"`
+	Status         string `json:"status"`
+	ConnectedAt    int64  `json:"connectedAt"`
+	DisconnectedAt int64  `json:"disconnectedAt,omitempty"`
+	Duration       int64  `json:"duration"`
+	TrafficIn      int64  `json:"trafficIn"`
+	TrafficOut     int64  `json:"trafficOut"`
+}

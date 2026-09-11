@@ -3,6 +3,7 @@ import { formatUnixSeconds } from '../utils/format'
 import type { V2Page } from './http'
 import type {
   GetProxyResponse,
+  ProxyConnectionInfo,
   ProxyListV2Params,
   ProxyStatsInfo,
   ProxyV2Info,
@@ -108,6 +109,24 @@ export const getProxyByName = (name: string) => {
 export const getProxyTraffic = (name: string) => {
   return http.getV2<TrafficResponse>(
     `../api/v2/proxies/${encodeURIComponent(name)}/traffic`,
+  )
+}
+
+export const getProxyConnections = (
+  name: string,
+  params: {
+    page?: number
+    pageSize?: number
+    status?: 'all' | 'active' | 'closed'
+  } = {},
+) => {
+  return http.getV2<V2Page<ProxyConnectionInfo>>(
+    `../api/v2/proxies/${encodeURIComponent(name)}/connections${buildQueryString({
+      page: params.page,
+      pageSize: params.pageSize,
+      status:
+        params.status && params.status !== 'all' ? params.status : undefined,
+    })}`,
   )
 }
 

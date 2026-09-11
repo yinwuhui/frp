@@ -74,8 +74,32 @@ func (m *serverMetrics) OpenConnection(name string, proxyType string) {
 	}
 }
 
+func (m *serverMetrics) OpenConnectionWithInfo(info metrics.ConnectionOpenInfo) uint64 {
+	var id uint64
+	for _, v := range m.ms {
+		if detailed, ok := v.(metrics.DetailedServerMetrics); ok {
+			if nextID := detailed.OpenConnectionWithInfo(info); nextID != 0 {
+				id = nextID
+			}
+			continue
+		}
+		v.OpenConnection(info.ProxyName, info.ProxyType)
+	}
+	return id
+}
+
 func (m *serverMetrics) CloseConnection(name string, proxyType string) {
 	for _, v := range m.ms {
+		v.CloseConnection(name, proxyType)
+	}
+}
+
+func (m *serverMetrics) CloseConnectionWithInfo(id uint64, name string, proxyType string, trafficIn int64, trafficOut int64) {
+	for _, v := range m.ms {
+		if detailed, ok := v.(metrics.DetailedServerMetrics); ok {
+			detailed.CloseConnectionWithInfo(id, name, proxyType, trafficIn, trafficOut)
+			continue
+		}
 		v.CloseConnection(name, proxyType)
 	}
 }

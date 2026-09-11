@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	ReserveDays = 7
+	ReserveDays            = 7
+	ConnectionHistoryLimit = 10000
+	ConnectionStatusActive = "active"
+	ConnectionStatusClosed = "closed"
 )
 
 type ServerStats struct {
@@ -52,6 +55,42 @@ type ProxyTrafficInfo struct {
 	TrafficOut []int64
 }
 
+type ConnectionInfo struct {
+	ID             uint64
+	ProxyName      string
+	ProxyType      string
+	User           string
+	ClientID       string
+	RemoteAddr     string
+	RemoteIP       string
+	RemotePort     string
+	LocalAddr      string
+	LocalIP        string
+	LocalPort      string
+	Status         string
+	ConnectedAt    int64
+	DisconnectedAt int64
+	Duration       int64
+	TrafficIn      int64
+	TrafficOut     int64
+}
+
+type ConnectionStatistics struct {
+	ID             uint64
+	ProxyName      string
+	ProxyType      string
+	RemoteAddr     string
+	RemoteIP       string
+	RemotePort     string
+	LocalAddr      string
+	LocalIP        string
+	LocalPort      string
+	ConnectedAt    time.Time
+	DisconnectedAt time.Time
+	TrafficIn      int64
+	TrafficOut     int64
+}
+
 type ProxyStatistics struct {
 	Name          string
 	ProxyType     string
@@ -78,6 +117,10 @@ type ServerStatistics struct {
 	// statistics for different proxies
 	// key is proxy name
 	ProxyStatistics map[string]*ProxyStatistics
+
+	NextConnectionID  uint64
+	ActiveConns       map[uint64]*ConnectionStatistics
+	ConnectionHistory []*ConnectionStatistics
 }
 
 type Collector interface {
@@ -86,6 +129,7 @@ type Collector interface {
 	GetProxiesByTypeAndName(proxyType string, proxyName string) *ProxyStats
 	GetProxyByName(proxyName string) *ProxyStats
 	GetProxyTraffic(name string) *ProxyTrafficInfo
+	GetProxyConnections(name string, status string, page int, pageSize int) ([]*ConnectionInfo, int)
 	ClearOfflineProxies() (int, int)
 	PruneOfflineProxies() (int, int)
 }

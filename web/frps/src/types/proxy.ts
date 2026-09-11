@@ -127,3 +127,25 @@ export interface TrafficPoint {
   trafficIn: number
   trafficOut: number
 }
+
+export type ProxyConnectionStatus = 'active' | 'closed'
+
+export interface ProxyConnectionInfo {
+  id: number
+  proxyName: string
+  proxyType: string
+  user: string
+  clientID: string
+  remoteAddr: string
+  remoteIP: string
+  remotePort: string
+  localAddr: string
+  localIP: string
+  localPort: string
+  status: ProxyConnectionStatus
+  connectedAt: number
+  disconnectedAt?: number
+  duration: number
+  trafficIn: number
+  trafficOut: number
+}
